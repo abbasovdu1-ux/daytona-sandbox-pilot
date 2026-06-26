@@ -1,5 +1,13 @@
 import { setDaytonaRuntimeEnv } from "./daytona-adapter";
-import { cleanupJob, getSnapshot, launchBatch, stopSandbox } from "./worker-engine";
+import { setEmailRuntimeEnv } from "./email-service";
+import {
+  cleanupJob,
+  getSnapshot,
+  launchBatch,
+  sendTestEmail,
+  stopSandbox,
+  updateAlertSettings,
+} from "./worker-engine";
 
 function json(data: unknown, init?: ResponseInit) {
   return new Response(JSON.stringify(data), {
@@ -26,6 +34,7 @@ export async function handleWorkerApi(
   const url = new URL(request.url);
   if (!url.pathname.startsWith("/api/worker")) return undefined;
   setDaytonaRuntimeEnv(runtimeEnv);
+  setEmailRuntimeEnv(runtimeEnv);
 
   if (request.method === "GET" && url.pathname === "/api/worker/state") {
     return json(getSnapshot());
@@ -43,6 +52,30 @@ export async function handleWorkerApi(
 
     const job = launchBatch(description, count, template);
     return json({ job, snapshot: getSnapshot() }, { status: 201 });
+  }
+
+  if (request.method === "PUT" && url.pathname === "/api/worker/settings") {
+    const body = await readJson(request);
+    const settings = updateAlertSettings({
+      costAlertThreshold: Number(body.costAlertThreshold),
+      runtimeAlertSec: Number(body.runtimeAlertSec),
+      autoCleanupSec: Number(body.autoCleanupSec),
+      emailAlertsEnabled: Boolean(body.emailAlertsEnabled),
+      emailRecipient: String(body.emailRecipient ?? ""),
+    });
+    return json({ settings, snapshot: getSnapshot() });
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/worker/email/test") {
+    try {
+      const status = await sendTestEmail();
+      return json({ ok: true, status, snapshot: getSnapshot() });
+    } catch (error) {
+      return json(
+        { ok: false, error: error instanceof Error ? error.message : "Test email failed" },
+        { status: 400 },
+      );
+    }
   }
 
   const stopMatch = url.pathname.match(/^\/api\/worker\/sandboxes\/([^/]+)\/stop$/);

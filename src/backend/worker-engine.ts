@@ -5,6 +5,7 @@ import {
   stopSandbox as stopDaytonaSandbox,
   type DaytonaExecutionHandle,
 } from "./daytona-adapter";
+import { defaultEmailFrom, getEmailOutbox, isEmailConfigured, sendEmail } from "./email-service";
 
 interface WorkerRuntime {
   sandboxId: string;
@@ -18,6 +19,19 @@ export interface WorkerSnapshot {
   sandboxes: Sandbox[];
   logs: Record<string, LogLine[]>;
   jobs: BatchJob[];
+  alertSettings: AlertSettings;
+  emailOutbox: ReturnType<typeof getEmailOutbox>;
+  emailProviderConfigured: boolean;
+}
+
+export interface AlertSettings {
+  costAlertThreshold: number;
+  runtimeAlertSec: number;
+  autoCleanupSec: number;
+  emailAlertsEnabled: boolean;
+  emailRecipient: string;
+  emailFrom: string;
+  lastEmailStatus?: string;
 }
 
 const AGENTS = ["worker-alpha", "worker-beta", "worker-gamma", "worker-delta", "worker-epsilon"];
@@ -26,9 +40,20 @@ const state: WorkerSnapshot = {
   sandboxes: [],
   logs: {},
   jobs: [],
+  alertSettings: {
+    costAlertThreshold: 10,
+    runtimeAlertSec: 1800,
+    autoCleanupSec: 3600,
+    emailAlertsEnabled: false,
+    emailRecipient: "",
+    emailFrom: defaultEmailFrom(),
+  },
+  emailOutbox: [],
+  emailProviderConfigured: false,
 };
 
 const runtimes = new Map<string, WorkerRuntime>();
+const sentAlertKeys = new Set<string>();
 let interval: ReturnType<typeof setInterval> | undefined;
 
 function nowIso() {
@@ -72,6 +97,75 @@ function updateRuntimeEstimates(runtime: WorkerRuntime) {
 
   sandbox.runtimeSec = Math.max(0, Math.floor((Date.now() - runtime.startedAtMs) / 1000));
   sandbox.costCredits = +(sandbox.runtimeSec * 0.003).toFixed(3);
+  void checkAlerts(sandbox);
+}
+
+function emailAlertSubject(kind: "cost" | "runtime") {
+  return kind === "cost"
+    ? "Daytona AgentOps cost alert"
+    : "Daytona AgentOps runtime alert";
+}
+
+async function sendAlertEmail(kind: "cost" | "runtime", body: string) {
+  const settings = state.alertSettings;
+  if (!settings.emailAlertsEnabled || !settings.emailRecipient) return;
+
+  try {
+    const result = await sendEmail({
+      to: settings.emailRecipient,
+      subject: emailAlertSubject(kind),
+      text: body,
+    });
+    state.alertSettings.lastEmailStatus = `${result.message} (${new Date().toLocaleTimeString()})`;
+  } catch (error) {
+    state.alertSettings.lastEmailStatus =
+      error instanceof Error ? error.message : "Email alert failed";
+  }
+}
+
+async function checkAlerts(changedSandbox: Sandbox) {
+  const settings = state.alertSettings;
+  if (!settings.emailAlertsEnabled || !settings.emailRecipient) return;
+
+  if (changedSandbox.runtimeSec > settings.runtimeAlertSec) {
+    const key = `runtime:${changedSandbox.id}:${settings.runtimeAlertSec}`;
+    if (!sentAlertKeys.has(key)) {
+      sentAlertKeys.add(key);
+      await sendAlertEmail(
+        "runtime",
+        [
+          `Sandbox ${changedSandbox.name} exceeded the runtime threshold.`,
+          "",
+          `Sandbox ID: ${changedSandbox.id}`,
+          `Runtime: ${changedSandbox.runtimeSec}s`,
+          `Threshold: ${settings.runtimeAlertSec}s`,
+          `Job ID: ${changedSandbox.jobId}`,
+        ].join("\n"),
+      );
+      addLog(changedSandbox.id, "warn", "[email] runtime alert dispatched");
+    }
+  }
+
+  const jobCost = state.sandboxes
+    .filter((sandbox) => sandbox.jobId === changedSandbox.jobId)
+    .reduce((sum, sandbox) => sum + sandbox.costCredits, 0);
+  if (jobCost > settings.costAlertThreshold) {
+    const key = `cost:${changedSandbox.jobId}:${settings.costAlertThreshold}`;
+    if (!sentAlertKeys.has(key)) {
+      sentAlertKeys.add(key);
+      await sendAlertEmail(
+        "cost",
+        [
+          `Job ${changedSandbox.jobId} exceeded the cost threshold.`,
+          "",
+          `Estimated cost: ${jobCost.toFixed(3)} credits`,
+          `Threshold: ${settings.costAlertThreshold} credits`,
+          `Latest sandbox: ${changedSandbox.id}`,
+        ].join("\n"),
+      );
+      addLog(changedSandbox.id, "warn", "[email] cost alert dispatched");
+    }
+  }
 }
 
 async function runWorkerSandbox(runtime: WorkerRuntime) {
@@ -163,7 +257,63 @@ export function getSnapshot(): WorkerSnapshot {
       Object.entries(state.logs).map(([id, lines]) => [id, lines.map((line) => ({ ...line }))]),
     ),
     jobs: state.jobs.map((j) => ({ ...j, sandboxIds: [...j.sandboxIds] })),
+    alertSettings: { ...state.alertSettings, emailFrom: defaultEmailFrom() },
+    emailOutbox: getEmailOutbox(),
+    emailProviderConfigured: isEmailConfigured(),
   };
+}
+
+export function updateAlertSettings(settings: Partial<AlertSettings>): AlertSettings {
+  const numberOrCurrent = (next: unknown, current: number, min: number) => {
+    const value = Number(next);
+    return Number.isFinite(value) ? Math.max(min, value) : current;
+  };
+
+  state.alertSettings = {
+    ...state.alertSettings,
+    ...settings,
+    costAlertThreshold: numberOrCurrent(
+      settings.costAlertThreshold,
+      state.alertSettings.costAlertThreshold,
+      0.001,
+    ),
+    runtimeAlertSec: numberOrCurrent(
+      settings.runtimeAlertSec,
+      state.alertSettings.runtimeAlertSec,
+      1,
+    ),
+    autoCleanupSec: numberOrCurrent(
+      settings.autoCleanupSec,
+      state.alertSettings.autoCleanupSec,
+      1,
+    ),
+    emailRecipient: String(settings.emailRecipient ?? state.alertSettings.emailRecipient).trim(),
+    emailAlertsEnabled: Boolean(settings.emailAlertsEnabled ?? state.alertSettings.emailAlertsEnabled),
+    emailFrom: defaultEmailFrom(),
+  };
+  sentAlertKeys.clear();
+  return { ...state.alertSettings };
+}
+
+export async function sendTestEmail(): Promise<string> {
+  const settings = state.alertSettings;
+  if (!settings.emailRecipient) {
+    throw new Error("Email recipient is required");
+  }
+
+  const result = await sendEmail({
+    to: settings.emailRecipient,
+    subject: "Daytona AgentOps test email",
+    text: [
+      "Email alerts are configured for Daytona AgentOps.",
+      "",
+      `Cost threshold: ${settings.costAlertThreshold} credits`,
+      `Runtime threshold: ${settings.runtimeAlertSec}s`,
+      `Auto cleanup threshold: ${settings.autoCleanupSec}s`,
+    ].join("\n"),
+  });
+  state.alertSettings.lastEmailStatus = `${result.message} (${new Date().toLocaleTimeString()})`;
+  return state.alertSettings.lastEmailStatus;
 }
 
 export function launchBatch(description: string, count: number, template: string): BatchJob {
