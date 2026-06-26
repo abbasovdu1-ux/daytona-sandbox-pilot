@@ -23,14 +23,18 @@ function TaskRunner() {
   const [parallel, setParallel] = useState(5);
   const [template, setTemplate] = useState(USECASE_TEMPLATES[1]);
 
-  function execute() {
+  async function execute() {
     if (!description.trim()) {
       toast.error("Task description is required");
       return;
     }
-    const jobId = launchBatch(description, parallel, template);
-    toast.success(`Batch ${jobId} dispatched · ${parallel} sandboxes provisioning`);
-    navigate({ to: "/sandboxes" });
+    try {
+      const jobId = await launchBatch(description, parallel, template);
+      toast.success(`Batch ${jobId} dispatched - ${parallel} sandboxes provisioning`);
+      navigate({ to: "/sandboxes" });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Worker dispatch failed");
+    }
   }
 
   return (

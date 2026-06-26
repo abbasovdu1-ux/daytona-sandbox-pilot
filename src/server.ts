@@ -1,5 +1,6 @@
 import "./lib/error-capture";
 
+import { handleWorkerApi } from "./backend/worker-api";
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
 
@@ -40,6 +41,9 @@ async function normalizeCatastrophicSsrResponse(response: Response): Promise<Res
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     try {
+      const workerApiResponse = await handleWorkerApi(request, env);
+      if (workerApiResponse) return workerApiResponse;
+
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
       return await normalizeCatastrophicSsrResponse(response);
