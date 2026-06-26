@@ -12,4 +12,9 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  nitro: {
+    // Allow 300 s for Daytona sandbox provisioning + execution (written into .vc-config.json
+    // by the vercel preset — NOT set in vercel.json which conflicts with Build Output API mode).
+    vercel: { maxDuration: 300 },
+  },
 });
