@@ -19,7 +19,10 @@ import uuid
 
 from shared.state import Solution
 
-USE_MOCK = os.getenv("USE_MOCK", "true").lower() == "true"
+# USE_MOCK_LLM overrides USE_MOCK for the LLM layer only.
+# Set USE_MOCK_LLM=false + OPENAI_API_KEY to call real OpenAI.
+_global_mock = os.getenv("USE_MOCK", "true").lower() == "true"
+USE_MOCK = os.getenv("USE_MOCK_LLM", str(_global_mock)).lower() == "true"
 
 _MOCK_SOLUTIONS = [
     "def is_palindrome(s):\n    return s == s[::-1]",
@@ -69,20 +72,32 @@ async def _mock_generate(_task: str, n: int) -> tuple[list[Solution], int]:
 
 
 async def _real_generate(task: str, n: int) -> tuple[list[Solution], int]:
-    import openai  # deferred so mock mode never needs the package installed
+    import openai
 
-    client = openai.AsyncOpenAI()  # reads OPENAI_API_KEY from env
-    resp = await client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user",   "content": _build_prompt(task, n)},
-        ],
-        temperature=1.0,   # high temperature → diverse solutions
-    )
-    content = resp.choices[0].message.content or ""
-    tokens = resp.usage.total_tokens if resp.usage else 0
-    return _parse_solutions(content, n), tokens
+    client = openai.AsyncOpenAI()
+    try:
+        resp = await client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user",   "content": _build_prompt(task, n)},
+            ],
+            temperature=1.0,
+        )
+        content = resp.choices[0].message.content or ""
+        tokens = resp.usage.total_tokens if resp.usage else 0
+        return _parse_solutions(content, n), tokens
+
+    except openai.AuthenticationError:
+        # Key invalid/missing — fall back to mock so Daytona runner can still be tested
+        import warnings
+        warnings.warn("[llm] OpenAI key invalid (401) — using mock solutions; fix OPENAI_API_KEY")
+        return await _mock_generate(task, n)
+
+    except openai.RateLimitError:
+        import warnings
+        warnings.warn("[llm] OpenAI rate limit hit — using mock solutions")
+        return await _mock_generate(task, n)
 
 
 async def generate_solutions(task: str, n: int = 5) -> tuple[list[Solution], int]:

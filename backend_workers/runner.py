@@ -28,7 +28,11 @@ import time
 from shared.state import RunState, Solution, update_sandbox
 from backend_workers.cost import compute_cost, total_cost
 
-USE_MOCK = os.getenv("USE_MOCK", "true").lower() == "true"
+# USE_MOCK_RUNNER overrides USE_MOCK for the sandbox layer only.
+# Set USE_MOCK_RUNNER=false + DAYTONA_API_KEY to run real sandboxes
+# while keeping the LLM mocked (no OPENAI_API_KEY needed).
+_global_mock = os.getenv("USE_MOCK", "true").lower() == "true"
+USE_MOCK = os.getenv("USE_MOCK_RUNNER", str(_global_mock)).lower() == "true"
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +72,7 @@ def _sync_execute(solution: Solution, tests: str, run_id: str) -> None:
 
     config = DaytonaConfig(
         api_key=os.environ["DAYTONA_API_KEY"],
-        server_url=os.getenv("DAYTONA_SERVER_URL", "https://app.daytona.io/api"),
+        api_url=os.getenv("DAYTONA_API_URL", "https://app.daytona.io/api"),
     )
     client = Daytona(config=config)
 

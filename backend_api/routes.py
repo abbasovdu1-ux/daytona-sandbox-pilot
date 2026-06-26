@@ -39,7 +39,9 @@ except ImportError:
     _worker_run_all = None    # type: ignore[assignment]
     _calc_llm_cost = None     # type: ignore[assignment]
 
-USE_MOCK: bool = os.getenv("USE_MOCK", "true").lower() == "true"
+_global_mock: bool = os.getenv("USE_MOCK", "true").lower() == "true"
+USE_MOCK_LLM: bool = os.getenv("USE_MOCK_LLM", str(_global_mock)).lower() == "true"
+USE_MOCK_RUNNER: bool = os.getenv("USE_MOCK_RUNNER", str(_global_mock)).lower() == "true"
 
 # ---------------------------------------------------------------------------
 # Inline mock fallbacks
@@ -89,16 +91,20 @@ async def _mock_run_all(
     run.total_cost = round(run.llm_cost + run.compute_cost, 6)
 
 
-def _active_mock() -> bool:
-    return USE_MOCK or not _WORKERS_AVAILABLE
+def _active_mock_llm() -> bool:
+    return USE_MOCK_LLM or not _WORKERS_AVAILABLE
+
+
+def _active_mock_runner() -> bool:
+    return USE_MOCK_RUNNER or not _WORKERS_AVAILABLE
 
 
 def _generate_fn():
-    return _mock_generate if _active_mock() else _worker_generate
+    return _mock_generate if _active_mock_llm() else _worker_generate
 
 
 def _run_all_fn():
-    return _mock_run_all if _active_mock() else _worker_run_all
+    return _mock_run_all if _active_mock_runner() else _worker_run_all
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +164,7 @@ async def start_run(body: RunRequest):
       5. Fire-and-forget run_all via asyncio.create_task (never awaited here).
       6. Return run_id + mock flag.
     """
-    using_mock = _active_mock()
+    using_mock = _active_mock_llm() or _active_mock_runner()
 
     run = store.create_run(body.task)
     solutions, tokens = await _generate_fn()(body.task, body.n)
@@ -169,7 +175,7 @@ async def start_run(body: RunRequest):
         run.solutions[sol.id] = store.SandboxState(status="pending")
 
     # Wire LLM cost from real token count (0 in mock mode)
-    if not using_mock and _calc_llm_cost is not None:
+    if not _active_mock_llm() and _calc_llm_cost is not None:
         run.llm_cost = _calc_llm_cost(tokens)
 
     # Fire-and-forget — HTTP response returns before any sandbox starts
