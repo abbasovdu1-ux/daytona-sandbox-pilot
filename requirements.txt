@@ -1,0 +1,12 @@
+# Root requirements — installs everything needed to run the full stack.
+# Engineers can also install only their folder's requirements.txt.
+fastapi
+uvicorn[standard]
+python-dotenv
+pydantic
+jinja2
+httpx
+daytona-sdk
+openai
+pytest
+pytest-asyncio
