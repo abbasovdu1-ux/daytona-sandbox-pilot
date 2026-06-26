@@ -40,6 +40,33 @@ export async function handleWorkerApi(
     return json(getSnapshot());
   }
 
+  if (request.method === "GET" && url.pathname === "/api/worker/debug") {
+    const { Daytona } = await import("@daytona/sdk");
+    const apiKey = (runtimeEnv as Record<string,unknown>)?.["DAYTONA_API_KEY"] as string
+      || (typeof process !== "undefined" ? process.env["DAYTONA_API_KEY"] : undefined);
+    const apiUrl = (runtimeEnv as Record<string,unknown>)?.["DAYTONA_API_URL"] as string
+      || (typeof process !== "undefined" ? process.env["DAYTONA_API_URL"] : undefined)
+      || "https://app.daytona.io/api";
+    let sandboxSample: unknown = null;
+    let clientError: string | null = null;
+    try {
+      if (apiKey) {
+        const d = new Daytona({ apiKey, apiUrl });
+        const list = await d.list({ limit: 1 });
+        sandboxSample = list[0] ? { id: list[0].id, toolboxProxyUrl: (list[0] as unknown as Record<string,unknown>).toolboxProxyUrl, state: list[0].state } : "empty";
+      }
+    } catch (e) { clientError = String(e); }
+    return json({
+      hasKey: !!apiKey,
+      keyPrefix: apiKey ? apiKey.slice(0, 8) + "..." : null,
+      apiUrl,
+      clientError,
+      sandboxSample,
+      VERCEL: typeof process !== "undefined" ? process.env["VERCEL"] : "no-process",
+      NODE_VERSION: typeof process !== "undefined" ? process.version : "no-process",
+    });
+  }
+
   if (request.method === "POST" && url.pathname === "/api/worker/jobs") {
     const body = await readJson(request);
     const description = String(body.description ?? "").trim();
