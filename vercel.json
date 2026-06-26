@@ -1,5 +1,10 @@
 {
   "buildCommand": "NITRO_PRESET=vercel npm run build",
   "outputDirectory": ".vercel/output",
-  "framework": null
+  "framework": null,
+  "functions": {
+    "__server.func": {
+      "maxDuration": 300
+    }
+  }
 }

@@ -48,11 +48,9 @@ function daytonaClient() {
   if (!apiKey) {
     throw new Error("DAYTONA_API_KEY is not configured");
   }
-  return new Daytona({
-    apiKey,
-    apiUrl: env("DAYTONA_API_URL") ?? "https://app.daytona.io/api",
-    target: env("DAYTONA_TARGET"),
-  });
+  // Use || not ?? so empty-string env vars fall through to the default
+  const apiUrl = env("DAYTONA_API_URL") || "https://app.daytona.io/api";
+  return new Daytona({ apiKey, apiUrl });
 }
 
 function shellQuote(value: string) {
