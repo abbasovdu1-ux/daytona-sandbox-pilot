@@ -1,3 +1,7 @@
+# Build outputs
+.output/
+.netlify/
+
 # Python
 .env
 __pycache__/
